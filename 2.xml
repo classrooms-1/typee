@@ -152,6 +152,198 @@
   }
 })();
 </script>
+<script>
+(function () {
+  var doc = document;
+  var win = window;
+  var target = null;
+  var faked = false;
+  var suppressed = false;
+
+  function canvasEl() {
+    return doc.querySelector("canvas") || doc.getElementById("app") || doc.body;
+  }
+
+  var pleDesc = Object.getOwnPropertyDescriptor(Document.prototype, "pointerLockElement");
+  var realGet = pleDesc && pleDesc.get;
+
+  function realLocked() {
+    try { return realGet ? realGet.call(doc) : null; } catch (e) { return null; }
+  }
+
+  try {
+    Object.defineProperty(Document.prototype, "pointerLockElement", {
+      configurable: true,
+      get: function () {
+        var r = realLocked();
+        if (r) return r;
+        return faked ? target : null;
+      }
+    });
+  } catch (e) {}
+
+  function fire(names) {
+    for (var i = 0; i < names.length; i++) {
+      try { doc.dispatchEvent(new Event(names[i])); } catch (e) {}
+    }
+  }
+
+  function applyCursor(hide) {
+    try {
+      var c = canvasEl();
+      if (c && c.style) c.style.cursor = hide ? "none" : "";
+      doc.body.style.cursor = hide ? "none" : "";
+    } catch (e) {}
+  }
+
+  function fakeLock(el) {
+    if (faked) return;
+    target = el || canvasEl();
+    if (!target) return;
+    faked = true;
+    applyCursor(true);
+    fire(["pointerlockchange", "mozpointerlockchange", "webkitpointerlockchange"]);
+  }
+
+  function fakeUnlock() {
+    if (!faked) return;
+    faked = false;
+    target = null;
+    applyCursor(false);
+    fire(["pointerlockchange", "mozpointerlockchange", "webkitpointerlockchange"]);
+  }
+
+  var nativeRequest = Element.prototype.requestPointerLock;
+  if (nativeRequest) {
+    Element.prototype.requestPointerLock = function () {
+      var el = this;
+      var settled = false;
+
+      function done() {
+        if (settled) return;
+        settled = true;
+        doc.removeEventListener("pointerlockchange", onChange, true);
+        doc.removeEventListener("pointerlockerror", onError, true);
+      }
+      function onChange() { if (realLocked()) done(); }
+      function onError() { done(); fakeLock(el); }
+
+      doc.addEventListener("pointerlockchange", onChange, true);
+      doc.addEventListener("pointerlockerror", onError, true);
+
+      var result;
+      try {
+        result = nativeRequest.apply(el, arguments);
+        if (result && typeof result["catch"] === "function") {
+          result["catch"](function () { onError(); });
+        }
+      } catch (e) {
+        onError();
+        return undefined;
+      }
+
+      win.setTimeout(function () {
+        if (settled) return;
+        done();
+        if (!realLocked()) fakeLock(el);
+      }, 160);
+
+      return result && typeof result["catch"] === "function" ? result["catch"](function () {}) : result;
+    };
+  }
+
+  var nativeExit = Document.prototype.exitPointerLock;
+  Document.prototype.exitPointerLock = function () {
+    fakeUnlock();
+    try { if (nativeExit) return nativeExit.apply(this, arguments); } catch (e) {}
+  };
+
+  var nativeFullscreen = Element.prototype.requestFullscreen;
+  if (nativeFullscreen) {
+    Element.prototype.requestFullscreen = function () {
+      try {
+        var r = nativeFullscreen.apply(this, arguments);
+        if (r && typeof r["catch"] === "function") return r["catch"](function () {});
+        return r;
+      } catch (e) { return Promise.resolve(); }
+    };
+  }
+
+  function focusGame() {
+    try { win.focus(); } catch (e) {}
+    var c = canvasEl();
+    if (c && c.focus) { try { c.focus({ preventScroll: true }); } catch (e) { try { c.focus(); } catch (e2) {} } }
+  }
+
+  doc.addEventListener("pointerdown", function (e) {
+    focusGame();
+    if (e.button !== 0) return;
+    if (e.target && e.target.closest && e.target.closest("button, a, input, select, textarea, [role=button], .mobile-action, #sm-fs")) return;
+    if (realLocked() || faked) return;
+    win.setTimeout(function () {
+      if (!realLocked() && !faked) fakeLock(canvasEl());
+    }, 220);
+  }, true);
+
+  doc.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") fakeUnlock();
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Spacebar", "PageUp", "PageDown", "Home", "End"].indexOf(e.key) >= 0) {
+      if (e.target === doc.body || e.target === doc.documentElement || (e.target && e.target.tagName === "CANVAS")) {
+        e.preventDefault();
+      }
+    }
+  }, false);
+
+  doc.addEventListener("fullscreenchange", function () {
+    if (!doc.fullscreenElement) return;
+    win.setTimeout(function () {
+      if (faked) fakeUnlock();
+      var c = canvasEl();
+      if (c && c.requestPointerLock) { try { c.requestPointerLock(); } catch (e) {} }
+    }, 120);
+  });
+
+  win.addEventListener("blur", function () { fakeUnlock(); });
+
+  function addFullscreenButton() {
+    if (doc.getElementById("sm-fs")) return;
+    var b = doc.createElement("button");
+    b.id = "sm-fs";
+    b.type = "button";
+    b.title = "Fullscreen";
+    b.textContent = "⛶";
+    b.style.cssText = [
+      "position:fixed", "right:10px", "top:10px", "z-index:2147483647",
+      "width:38px", "height:38px", "line-height:34px", "padding:0",
+      "font-size:19px", "color:#e8eef8", "background:rgba(12,16,24,.72)",
+      "border:1px solid rgba(255,255,255,.28)", "border-radius:9px",
+      "cursor:pointer", "font-family:system-ui,Arial,sans-serif"
+    ].join(";");
+    b.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      var el = doc.documentElement;
+      if (doc.fullscreenElement) {
+        if (doc.exitFullscreen) doc.exitFullscreen();
+      } else if (el.requestFullscreen) {
+        el.requestFullscreen();
+      } else if (el.webkitRequestFullscreen) {
+        el.webkitRequestFullscreen();
+      }
+      focusGame();
+    });
+    doc.body.appendChild(b);
+  }
+
+  if (doc.readyState === "loading") {
+    doc.addEventListener("DOMContentLoaded", addFullscreenButton);
+  } else {
+    addFullscreenButton();
+  }
+  win.setTimeout(addFullscreenButton, 1500);
+  win.setTimeout(focusGame, 300);
+})();
+</script>
 <link rel="stylesheet" crossorigin="" href="https://cdn.jsdelivr.net/gh/classrooms-1/typee@main/assets/index-SMhlfJw5.css"/>
 <script type="module" crossorigin="" src="https://cdn.jsdelivr.net/gh/classrooms-1/typee@main/assets/index-Dp1ZlSod.js"></script>
 </head>
