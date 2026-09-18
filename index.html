@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="theme-color" content="#0b0f17"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<title>SpiderMaster</title>
+<script>
+(function () {
+  var LANG = "en";
+  var LS = "sm_player_data", LSS = "sm_player_stats";
+
+  function rd(k, f) { try { return JSON.parse(localStorage.getItem(k) || f); } catch (e) { return JSON.parse(f); } }
+  function wr(k, o) { try { localStorage.setItem(k, JSON.stringify(o)); } catch (e) {} }
+
+  var pdata = rd(LS, "{}"), pstats = rd(LSS, "{}");
+  var isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+  function cb(o, n, a) { try { if (o && o.callbacks && typeof o.callbacks[n] === "function") o.callbacks[n](a); } catch (e) {} }
+
+  var yplayer = {
+    getUniqueID: function () { return "local-player"; },
+    getName: function () { return "Player"; },
+    getPhoto: function () { return ""; },
+    getMode: function () { return "lite"; },
+    isAuthorized: function () { return false; },
+    getPayingStatus: function () { return "unknown"; },
+    getIDsPerGame: function () { return Promise.resolve([]); },
+    getData: function () { return Promise.resolve(JSON.parse(JSON.stringify(pdata))); },
+    setData: function (d) { pdata = Object.assign(pdata, d || {}); wr(LS, pdata); return Promise.resolve(); },
+    getStats: function () { return Promise.resolve(JSON.parse(JSON.stringify(pstats))); },
+    setStats: function (d) { pstats = Object.assign(pstats, d || {}); wr(LSS, pstats); return Promise.resolve(); },
+    incrementStats: function (d) {
+      Object.keys(d || {}).forEach(function (k) { pstats[k] = (+pstats[k] || 0) + (+d[k] || 0); });
+      wr(LSS, pstats); return Promise.resolve(JSON.parse(JSON.stringify(pstats)));
+    },
+    signIn: function () { return Promise.reject(new Error("no auth")); }
+  };
+
+  var yleaderboards = {
+    getLeaderboardDescription: function (n) {
+      return Promise.resolve({ name: n, "default": true, title: {}, entry_style: {},
+        description: { invert_sort_order: false, score_format: { type: "numeric", options: { decimal_offset: 0 } }, type: "numeric" } });
+    },
+    setLeaderboardScore: function () { return Promise.resolve(); },
+    getLeaderboardPlayerEntry: function () { return Promise.reject(new Error("no entry")); },
+    getLeaderboardEntries: function () { return Promise.resolve({ leaderboard: {}, ranges: [], userRank: 0, entries: [] }); }
+  };
+
+  var ysdk = {
+    environment: { app: { id: "0" }, browser: { lang: LANG }, i18n: { lang: LANG, tld: "com" }, payload: null, isTelegram: false },
+    deviceInfo: {
+      type: isMobile ? "mobile" : "desktop",
+      isMobile: function () { return isMobile; },
+      isDesktop: function () { return !isMobile; },
+      isTablet: function () { return false; },
+      isTV: function () { return false; }
+    },
+    adv: {
+      showFullscreenAdv: function (o) { cb(o, "onOpen"); setTimeout(function () { cb(o, "onClose", false); }, 300); },
+      showRewardedVideo: function (o) {
+        cb(o, "onOpen");
+        setTimeout(function () { cb(o, "onRewarded"); setTimeout(function () { cb(o, "onClose"); }, 120); }, 400);
+      },
+      showBannerAdv: function () { return Promise.resolve({ stickyAdvIsShowing: false, reason: "UNKNOWN" }); },
+      hideBannerAdv: function () { return Promise.resolve({ stickyAdvIsShowing: false }); },
+      getBannerAdvStatus: function () { return Promise.resolve({ stickyAdvIsShowing: false, reason: "UNKNOWN" }); }
+    },
+    features: {
+      LoadingAPI: { ready: function () {} },
+      GameplayAPI: { start: function () {}, stop: function () {} }
+    },
+    screen: {
+      fullscreen: {
+        get status() { return document.fullscreenElement ? "on" : "off"; },
+        request: function () { try { (document.documentElement.requestFullscreen || function () {}).call(document.documentElement); } catch (e) {} return Promise.resolve(); },
+        exit: function () { try { if (document.exitFullscreen) document.exitFullscreen(); } catch (e) {} return Promise.resolve(); }
+      }
+    },
+    feedback: {
+      canReview: function () { return Promise.resolve({ value: false, reason: "NO_AUTH" }); },
+      requestReview: function () { return Promise.resolve({ feedbackSent: false }); }
+    },
+    shortcut: {
+      canShowPrompt: function () { return Promise.resolve({ canShow: false }); },
+      showPrompt: function () { return Promise.resolve({ outcome: "rejected" }); }
+    },
+    clipboard: { writeText: function (t) { try { return navigator.clipboard.writeText(t); } catch (e) { return Promise.resolve(); } } },
+    auth: { openAuthDialog: function () { return Promise.reject(new Error("no auth")); } },
+    getPlayer: function () { return Promise.resolve(yplayer); },
+    getLeaderboards: function () { return Promise.resolve(yleaderboards); },
+    getPayments: function () { return Promise.reject(new Error("payments unavailable")); },
+    getFlags: function () { return Promise.resolve({}); },
+    getStorage: function () { return Promise.resolve(window.localStorage); },
+    isAvailableMethod: function () { return Promise.resolve(false); },
+    dispatchEvent: function () { return Promise.resolve(); },
+    onEvent: function () { return function () {}; },
+    on: function () { return function () {}; },
+    off: function () {},
+    EVENT: { EXIT: "EXIT", HISTORY_BACK: "HISTORY_BACK" },
+    exit: function () { return Promise.resolve(); }
+  };
+
+  function deep() {
+    var fn = function () { return Promise.resolve(true); };
+    return new Proxy(fn, {
+      get: function (t, p) {
+        if (p === "then" || p === "catch" || p === "finally") return undefined;
+        if (p === Symbol.toPrimitive) return function () { return 0; };
+        if (p === "toString" || p === "valueOf") return function () { return ""; };
+        return deep();
+      },
+      apply: function () { return Promise.resolve(true); }
+    });
+  }
+  var proxied = new Proxy(ysdk, {
+    get: function (t, p) {
+      if (p === "then" || p === "catch" || p === "finally") return undefined;
+      if (p in t) return t[p];
+      if (typeof p === "symbol") return undefined;
+      return deep();
+    }
+  });
+
+  window.YaGames = { init: function () { return Promise.resolve(proxied); } };
+
+  var el = window.Element && Element.prototype;
+  var rpl = el && el.requestPointerLock;
+  if (rpl) {
+    el.requestPointerLock = function () {
+      try {
+        var r = rpl.apply(this, arguments);
+        if (r && typeof r["catch"] === "function") r["catch"](function () {});
+        return r;
+      } catch (e) { return undefined; }
+    };
+  }
+  var rfs = el && el.requestFullscreen;
+  if (rfs) {
+    el.requestFullscreen = function () {
+      try {
+        var r = rfs.apply(this, arguments);
+        if (r && typeof r["catch"] === "function") return r["catch"](function () {});
+        return r;
+      } catch (e) { return Promise.resolve(); }
+    };
+  }
+})();
+</script>
+<link rel="stylesheet" crossorigin="" href="https://cdn.jsdelivr.net/gh/classrooms-1/typee@main/assets/index-SMhlfJw5.css"/>
+<script type="module" crossorigin="" src="https://cdn.jsdelivr.net/gh/classrooms-1/typee@main/assets/index-Dp1ZlSod.js"></script>
+</head>
+<body>
+<div id="app"></div>
+</body>
+</html>
